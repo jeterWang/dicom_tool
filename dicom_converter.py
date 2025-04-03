@@ -7,6 +7,7 @@ import dicom2nifti.settings as settings
 from rt_utils import RTStructBuilder
 import logging
 import traceback
+import SimpleITK as sitk
 
 # --- 配置 ---
 # 禁用 dicom2nifti 详细输出 (可选)
@@ -19,7 +20,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # 定义基础路径
 INPUT_BASE_DIR = 'images'
-OUTPUT_BASE_DIR = 'nifti_output'
+OUTPUT_BASE_DIR = 'output'
 
 # 定义要处理的数据集配置
 # 每个字典代表一个数据集 (例如 'fixed', 'moving')
@@ -28,7 +29,7 @@ DATASET_CONFIGS = [
         'name': 'fixed',
         'dicom_image_dir': os.path.join(INPUT_BASE_DIR, 'fixed'),
         'dicom_contour_dir': os.path.join(INPUT_BASE_DIR, 'fixed', 'contour'),
-        'nifti_image_output_dir': os.path.join(OUTPUT_BASE_DIR, 'fixed'),
+        'nifti_image_output_dir': os.path.join(OUTPUT_BASE_DIR, 'nifti', 'fixed'),
         'nifti_image_filename': 'img.nii.gz',
         'nifti_mask_filename': 'contour_mask.nii.gz'
     },
@@ -36,7 +37,7 @@ DATASET_CONFIGS = [
         'name': 'moving',
         'dicom_image_dir': os.path.join(INPUT_BASE_DIR, 'moving'),
         'dicom_contour_dir': os.path.join(INPUT_BASE_DIR, 'moving', 'contour'),
-        'nifti_image_output_dir': os.path.join(OUTPUT_BASE_DIR, 'moving'),
+        'nifti_image_output_dir': os.path.join(OUTPUT_BASE_DIR, 'nifti', 'moving'),
         'nifti_image_filename': 'img.nii.gz',
         'nifti_mask_filename': 'contour_mask.nii.gz'
     },
@@ -44,9 +45,18 @@ DATASET_CONFIGS = [
         'name': 'moving_bio',
         'dicom_image_dir': os.path.join(INPUT_BASE_DIR, 'moving_bio'),
         'dicom_contour_dir': None,
-        'nifti_image_output_dir': os.path.join(OUTPUT_BASE_DIR, 'moving_bio'),
+        'nifti_image_output_dir': os.path.join(OUTPUT_BASE_DIR, 'nifti', 'moving_bio'),
         'nifti_image_filename': 'img.nii.gz',
         'nifti_mask_filename': None
+    },
+    {
+        'name': 'fixed_bio',
+        'dicom_image_dir': os.path.join(INPUT_BASE_DIR, 'fixed_bio'),
+        'dicom_contour_dir': None,
+        'nifti_image_output_dir': os.path.join(OUTPUT_BASE_DIR, 'nifti', 'fixed_bio'),
+        'nifti_image_filename': 'img.nii.gz',
+        'nifti_mask_filename': None,
+        'reference_space_dataset_name': 'fixed'
     }
 ]
 
@@ -212,6 +222,24 @@ def convert_contour_mask(rtstruct_dir, dicom_image_ref_dir, reference_nifti_path
         traceback.print_exc()
         return False
 
+# --- 新增：重采样辅助函数 ---
+def resample_sitk_image(input_image, reference_image, interpolator=sitk.sitkLinear, default_value=0):
+    """将 SimpleITK 图像重采样到参考图像的空间。"""
+    resample_filter = sitk.ResampleImageFilter()
+    # 使用参考图像设置输出空间的所有属性
+    resample_filter.SetReferenceImage(reference_image)
+    # 设置插值方法
+    resample_filter.SetInterpolator(interpolator)
+    # 使用身份变换（只改变网格，不移动图像内容相对物理空间的位置）
+    resample_filter.SetTransform(sitk.Transform())
+    # 设置超出边界的默认像素值
+    resample_filter.SetDefaultPixelValue(default_value)
+    # 设置输出像素类型与输入一致
+    resample_filter.SetOutputPixelType(input_image.GetPixelID())
+    # 执行重采样
+    return resample_filter.Execute(input_image)
+# --- 结束新增 ---
+
 # --- 主程序 ---
 if __name__ == "__main__":
     logging.info("===== 开始 DICOM 到 NIfTI 转换任务 =====")
@@ -221,6 +249,13 @@ if __name__ == "__main__":
 
     successful_datasets = 0
     failed_datasets = 0
+
+    # --- 新增：构建数据集名称到 NIfTI 路径的映射 --- 
+    nifti_image_paths = {}
+    for cfg in DATASET_CONFIGS:
+        if cfg.get('nifti_image_output_dir') and cfg.get('nifti_image_filename'):
+            nifti_image_paths[cfg['name']] = os.path.join(cfg['nifti_image_output_dir'], cfg['nifti_image_filename'])
+    # --- 结束新增 ---
 
     for config in DATASET_CONFIGS:
         dataset_name = config['name']
@@ -234,7 +269,51 @@ if __name__ == "__main__":
             desired_filename=config['nifti_image_filename']
         )
 
-        # 2. 如果图像转换成功，则转换轮廓
+        # --- 新增：检查是否需要重采样 --- 
+        if generated_image_path:
+            reference_dataset_name = config.get('reference_space_dataset_name')
+            if reference_dataset_name:
+                logging.info(f"检测到数据集 '{dataset_name}' 需要重采样到 '{reference_dataset_name}' 的空间。")
+                if reference_dataset_name not in nifti_image_paths:
+                    logging.error(f"错误: 在配置中未找到参考数据集 '{reference_dataset_name}' 的 NIfTI 路径。跳过重采样。")
+                    generated_image_path = None # 标记为失败
+                else:
+                    reference_nifti_path = nifti_image_paths[reference_dataset_name]
+                    if not os.path.exists(reference_nifti_path):
+                         logging.error(f"错误: 参考 NIfTI 文件 '{reference_nifti_path}' 不存在 (可能转换失败?)。跳过重采样。")
+                         generated_image_path = None # 标记为失败
+                    else:
+                        try:
+                            logging.info(f"开始重采样 '{generated_image_path}' 到 '{reference_nifti_path}' 的空间...")
+                            image_to_resample = sitk.ReadImage(generated_image_path)
+                            reference_image_sitk = sitk.ReadImage(reference_nifti_path)
+                            
+                            # 确定默认填充值 (尝试用图像最小值)
+                            try:
+                                stats = sitk.StatisticsImageFilter()
+                                stats.Execute(image_to_resample)
+                                default_value = float(stats.GetMinimum()) # 确保是浮点数
+                            except Exception as stat_err:
+                                 logging.warning(f"无法获取图像最小值 ({stat_err})，默认填充值设为 0。")
+                                 default_value = 0.0
+                            logging.info(f"重采样默认填充值: {default_value}")
+
+                            resampled_image = resample_sitk_image(
+                                input_image=image_to_resample,
+                                reference_image=reference_image_sitk,
+                                interpolator=sitk.sitkLinear, # 图像用线性插值
+                                default_value=default_value
+                            )
+                            logging.info(f"重采样完成，覆盖原始文件 '{generated_image_path}'")
+                            sitk.WriteImage(resampled_image, generated_image_path) # 覆盖
+                            logging.info("重采样成功。")
+                        except Exception as resample_e:
+                            logging.error(f"重采样 '{generated_image_path}' 时发生错误: {resample_e}")
+                            traceback.print_exc()
+                            generated_image_path = None # 重采样失败则标记失败
+        # --- 结束新增 ---
+
+        # 2. 如果图像转换(和重采样)成功，则转换轮廓
         mask_conversion_success = False
         contour_dir = config.get('dicom_contour_dir')
         mask_filename = config.get('nifti_mask_filename')

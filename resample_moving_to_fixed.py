@@ -9,8 +9,8 @@ import numpy as np # 确保导入 numpy
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # 定义输入和输出路径
-NIFTI_BASE_DIR = 'nifti_output'
-OUTPUT_RESAMPLED_DIR = 'nifti_output_resampled' # 新的输出目录
+NIFTI_BASE_DIR = 'output/nifti'
+OUTPUT_RESAMPLED_DIR = 'output/nifti'
 
 FIXED_IMAGE_PATH = os.path.join(NIFTI_BASE_DIR, 'fixed', 'img.nii.gz')
 MOVING_IMAGE_PATH = os.path.join(NIFTI_BASE_DIR, 'moving', 'img.nii.gz')
@@ -94,7 +94,7 @@ if __name__ == "__main__":
             input_files_ok = False
     
     if not input_files_ok:
-        logging.error("输入文件检查失败，无法继续。请确保 nifti_output 目录中有正确的 img.nii.gz 和 contour_mask.nii.gz 文件。")
+        logging.error("输入文件检查失败，无法继续。请确保 output/nifti 目录中有正确的 img.nii.gz 和 contour_mask.nii.gz 文件。")
         exit(1) # 退出脚本
         
     # 创建输出目录
@@ -173,6 +173,25 @@ if __name__ == "__main__":
         sitk.WriteImage(moving_bio_image_resampled, OUTPUT_MOVING_BIO_IMAGE_RESAMPLED_PATH) # 新增
 
         logging.info("===== 重采样完成 =====")
+        
+        # --- 新增：删除原始的 moving 和 moving_bio 文件 --- 
+        files_to_delete = [
+            MOVING_IMAGE_PATH,
+            MOVING_MASK_PATH,
+            MOVING_BIO_IMAGE_PATH
+        ]
+        logging.info("开始删除原始 NIfTI 文件...")
+        for file_path in files_to_delete:
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    logging.info(f"  已删除: {file_path}")
+                else:
+                     logging.warning(f"  文件不存在，无法删除: {file_path}")
+            except OSError as delete_err:
+                logging.error(f"  删除文件时出错: {file_path} - {delete_err}")
+        logging.info("原始文件删除完成 (如果存在)。")
+        # --- 结束新增 ---
 
     except Exception as e:
         logging.error("重采样过程中发生错误:")
