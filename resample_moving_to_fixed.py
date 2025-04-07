@@ -65,7 +65,7 @@ def resample_image_to_centered_grid(input_image, reference_image_for_grid, cente
     resample_filter.SetInterpolator(interpolator)
 
     # 设置默认像素值
-    resample_filter.SetDefaultPixelValue(input_image.GetPixelIDValue())
+    resample_filter.SetDefaultPixelValue(0) # 新方式：使用 0 填充外部区域
 
     # 设置输出像素类型
     if output_pixel_type is not None:

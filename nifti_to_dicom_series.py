@@ -292,105 +292,67 @@ if __name__ == "__main__":
                 logging.info("提取掩码中值为 1 的像素...")
                 mask_array_bool = (mask_array == 1)
                 
-                # --- 修改：基于 XYZ，逐层翻转 XY --- 
-                # --- 恢复：尝试 YXZ、XYZ 及其各种轴向翻转 (共 8 种) --- 
-                
-                # 1. 准备基础 XYZ 置换掩码 # 不再需要这个，合并到下面
-                # mask_xyz = None
-                # try:
-                #     axes_xyz = (2, 1, 0)
-                #     logging.info(f"准备基础 XYZ 置换掩码 {axes_xyz}...")
-                #     mask_xyz = np.transpose(mask_array_bool, axes=axes_xyz)
-                #     logging.debug(f"    基础 XYZ 形状: {mask_xyz.shape}")
-                # except Exception as e_prep_xyz:
-                #     logging.error(f"准备 XYZ 掩码时出错: {e_prep_xyz}")
-                #     mask_xyz = None
-                
-                # --- 新逻辑：逐层翻转 XY --- # (移除) 
-                # if mask_xyz is not None:
-                #     try:
-                #          roi_name = "Contour_SliceFlipped_XYZ"
-                #          logging.info(f"准备最终 ROI '{roi_name}': 基于 XYZ，逐层翻转 X(axis=0) 和 Y(axis=1)")
-                #          
-                #          # 创建空数组用于存储结果
-                #          mask_final_slices = np.empty_like(mask_xyz)
-                #          logging.debug(f"  创建空目标数组，形状: {mask_final_slices.shape}")
-                #          
-                #          # 逐层处理
-                #          num_slices_k = mask_xyz.shape[2]
-                #          for k in range(num_slices_k):
-                #               slice_xy = mask_xyz[:, :, k]
-                #               # flipped_slice = np.flip(slice_xy, axis=0)
-                #               # flipped_slice = np.flip(slice_xy, axis=1)
-                #               # flipped_slice = slice_xy # DEBUG: 恢复这行以测试无翻转
-                #               flipped_slice = np.flip(np.flip(slice_xy, axis=0), axis=1)
-                #               mask_final_slices[:, :, k] = flipped_slice
-                #               # if k == 0: logging.debug(f"    处理第 {k+1}/{num_slices_k} 层，翻转后形状: {flipped_slice.shape}") # 减少日志输出
-                #          logging.info(f"  已完成 {num_slices_k} 层的 XY 翻转处理。")
-                #               
-                #          logging.info(f"  尝试添加 ROI: {roi_name}")
-                #          rtstruct.add_roi(mask=mask_final_slices, name=roi_name)
-                #          logging.info(f"    成功添加 ROI: {roi_name}")
-                #     except RTStruct.ROIException as roi_exception:
-                #          logging.error(f"    添加 ROI '{roi_name}' 时发生 ROIException: {roi_exception}") 
-                #     except Exception as e:
-                #          logging.error(f"    添加 ROI '{roi_name}' 时发生意外错误: {e}")
-                #          traceback.print_exc()
-                # else:
-                #      logging.warning("基础 XYZ 掩码未能生成，无法尝试逐层翻转 ROI。")
-                # --- 结束新逻辑 --- 
-                
-                # --- 恢复：8 种可能性逻辑 --- 
-                # 1. 准备基础的 YXZ 和 XYZ 置换掩码
-                mask_yxz = None
-                mask_xyz = None
-                try:
-                    axes_yxz = (1, 2, 0)
-                    logging.info(f"准备基础 YXZ 置换掩码 {axes_yxz}...")
-                    mask_yxz = np.transpose(mask_array_bool, axes=axes_yxz)
-                    logging.debug(f"    YXZ 形状: {mask_yxz.shape}")
-                except Exception as e_prep_yxz:
-                    logging.error(f"准备 YXZ 掩码时出错: {e_prep_yxz}")
-                
-                try:
-                    axes_xyz = (2, 1, 0)
-                    logging.info(f"准备基础 XYZ 置换掩码 {axes_xyz}...")
-                    mask_xyz = np.transpose(mask_array_bool, axes=axes_xyz)
-                    logging.debug(f"    XYZ 形状: {mask_xyz.shape}")
-                except Exception as e_prep_xyz:
-                    logging.error(f"准备 XYZ 掩码时出错: {e_prep_xyz}")
-
-                # 2. 尝试添加所有可能的 ROI (基础 + 翻转)
-                roi_attempts = []
-                if mask_yxz is not None:
-                    roi_attempts.extend([
-                        ("Contour_YXZ", mask_yxz),
-                        ("Contour_YXZ_flipY", np.flip(mask_yxz, axis=0)), # YXZ 的 Y 轴是 axis 0
-                        ("Contour_YXZ_flipX", np.flip(mask_yxz, axis=1)), # YXZ 的 X 轴是 axis 1
-                        ("Contour_YXZ_flipZ", np.flip(mask_yxz, axis=2)), # YXZ 的 Z 轴是 axis 2
-                    ])
-                if mask_xyz is not None:
-                     roi_attempts.extend([
-                        ("Contour_XYZ", mask_xyz),
-                        ("Contour_XYZ_flipX", np.flip(mask_xyz, axis=0)), # XYZ 的 X 轴是 axis 0
-                        ("Contour_XYZ_flipY", np.flip(mask_xyz, axis=1)), # XYZ 的 Y 轴是 axis 1
-                        ("Contour_XYZ_flipZ", np.flip(mask_xyz, axis=2)), # XYZ 的 Z 轴是 axis 2
-                    ])
-
-                logging.info(f"尝试添加 {len(roi_attempts)} 种可能的 ROI...")
-                for roi_name, mask_to_add in roi_attempts:
+                # --- 新增：检查布尔掩码是否为空 ---
+                if not np.any(mask_array_bool):
+                    logging.warning("布尔掩码 (mask_array == 1) 中不包含任何 True 值！跳过 ROI 添加。")
+                else:
+                    logging.info(f"布尔掩码包含 {np.sum(mask_array_bool)} 个 True 体素。继续准备 ROI。")
+                    # --- 恢复：8 种可能性逻辑 --- 
+                    # --- 修改：只尝试 YXZ (Row, Col, Slice) 及其 Row/Col 翻转 (共 4 种) --- 
+                    
+                    # 1. 准备基础的 YXZ (Row, Col, Slice) 置换掩码
+                    mask_yxz = None
+                    # mask_xyz = None # 不再需要 XYZ
                     try:
-                        logging.info(f"  尝试添加 ROI: {roi_name}")
-                        rtstruct.add_roi(mask=mask_to_add, name=roi_name)
-                        logging.info(f"    成功添加 ROI: {roi_name}")
-                    except RTStruct.ROIException as roi_exception:
-                        # 维度错误理论上不应再发生，因为基础是 YXZ/XYZ
-                        logging.error(f"    添加 ROI '{roi_name}' 时发生 ROIException: {roi_exception}") 
-                        # traceback.print_exc() # 可能过于冗长，先注释掉
-                    except Exception as e:
-                        logging.error(f"    添加 ROI '{roi_name}' 时发生意外错误: {e}")
-                        traceback.print_exc()
-                # --- 结束恢复逻辑 --- 
+                        axes_yxz = (1, 2, 0) # YXZ 对应 Row, Col, Slice
+                        logging.info(f"准备基础 YXZ (Row, Col, Slice) 置换掩码 {axes_yxz}...")
+                        mask_yxz = np.transpose(mask_array_bool, axes=axes_yxz)
+                        logging.debug(f"    YXZ (Row, Col, Slice) 形状: {mask_yxz.shape}")
+                    except Exception as e_prep_yxz:
+                        logging.error(f"准备 YXZ 掩码时出错: {e_prep_yxz}")
+                    
+                    # try:
+                    #     axes_xyz = (2, 1, 0)
+                    #     logging.info(f"准备基础 XYZ 置换掩码 {axes_xyz}...")
+                    #     mask_xyz = np.transpose(mask_array_bool, axes=axes_xyz)
+                    #     logging.debug(f"    XYZ 形状: {mask_xyz.shape}")
+                    # except Exception as e_prep_xyz:
+                    #     logging.error(f"准备 XYZ 掩码时出错: {e_prep_xyz}")
+
+                    # 2. 尝试添加所有可能的 ROI (基础 + 翻转)
+                    # --- 修改：只尝试 YXZ 基础及其 Row/Col 翻转 --- 
+                    roi_attempts = []
+                    if mask_yxz is not None:
+                        roi_attempts.extend([
+                            ("Contour_YXZ_Base", mask_yxz),
+                            # ("Contour_YXZ_FlipRow", np.flip(mask_yxz, axis=0)), # YXZ 的 Row 轴是 axis 0
+                            # ("Contour_YXZ_FlipCol", np.flip(mask_yxz, axis=1)), # YXZ 的 Col 轴是 axis 1
+                            # ("Contour_YXZ_FlipRowCol", np.flip(np.flip(mask_yxz, axis=0), axis=1)), # 双重翻转
+                            # ("Contour_YXZ_flipZ", np.flip(mask_yxz, axis=2)), # 不再包含 Z 翻转
+                        ])
+                    # if mask_xyz is not None:
+                    #      roi_attempts.extend([
+                    #         ("Contour_XYZ", mask_xyz),
+                    #         ("Contour_XYZ_flipX", np.flip(mask_xyz, axis=0)), # XYZ 的 X 轴是 axis 0
+                    #         ("Contour_XYZ_flipY", np.flip(mask_xyz, axis=1)), # XYZ 的 Y 轴是 axis 1
+                    #         ("Contour_XYZ_flipZ", np.flip(mask_xyz, axis=2)), # XYZ 的 Z 轴是 axis 2
+                    #     ])
+
+                    logging.info(f"尝试添加 {len(roi_attempts)} 种可能的 ROI (基于 YXZ 及其 Row/Col 翻转)...")
+                    for roi_name, mask_to_add in roi_attempts:
+                        try:
+                            logging.info(f"  尝试添加 ROI: {roi_name}")
+                            rtstruct.add_roi(mask=mask_to_add, name=roi_name)
+                            logging.info(f"    成功添加 ROI: {roi_name}")
+                        except RTStruct.ROIException as roi_exception:
+                            # 维度错误理论上不应再发生，因为基础是 YXZ
+                            logging.error(f"    添加 ROI '{roi_name}' 时发生 ROIException: {roi_exception}") 
+                            # traceback.print_exc() # 可能过于冗长，先注释掉
+                        except Exception as e:
+                            logging.error(f"    添加 ROI '{roi_name}' 时发生意外错误: {e}")
+                            traceback.print_exc()
+                    # --- 结束恢复逻辑 --- 
+                # --- 结束新增的 else 块 --- 
 
                 # --- 移除旧的 YXZ/XYZ 单独尝试逻辑 ---
                          
